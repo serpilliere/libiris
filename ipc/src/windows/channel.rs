@@ -14,7 +14,7 @@ use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::fileapi::{CreateFileA, ReadFile, WriteFile, OPEN_EXISTING};
 use winapi::um::handleapi::{DuplicateHandle, INVALID_HANDLE_VALUE};
 use winapi::um::namedpipeapi::{ConnectNamedPipe, SetNamedPipeHandleState};
-use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId, OpenProcess};
+use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, OpenProcess};
 use winapi::um::winbase::CreateNamedPipeA;
 use winapi::um::winbase::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, PIPE_READMODE_MESSAGE,
@@ -34,8 +34,9 @@ impl CrossPlatformIpcChannel for IpcChannel {
     fn new() -> Result<(Self, Self), IpcError<'static>> {
         let pid: DWORD = unsafe { GetCurrentProcessId() };
         let mut pipe_id = 0;
-        let mut pipe_path = StackBuffer::<100>::default();
+        let thread_id = unsafe {GetCurrentThreadId() };
         loop {
+            let mut pipe_path = StackBuffer::<100>::default();
             pipe_id += 1;
             if write!(&mut pipe_path, "\\\\.\\pipe\\ipc-{}-{}\x00", pid, pipe_id).is_err() {
                 return Err(IpcError::InternalOsOperationFailed {
@@ -43,6 +44,7 @@ impl CrossPlatformIpcChannel for IpcChannel {
                     os_code: 0,
                 });
             }
+            debug!("Try open pipe {:?}...", core::str::from_utf8(pipe_path.as_bytes()).unwrap_or("?"));
             let handle1 = unsafe {
                 let res = CreateNamedPipeA(
                     pipe_path.as_bytes().as_ptr() as *const _,
@@ -68,6 +70,7 @@ impl CrossPlatformIpcChannel for IpcChannel {
                 }
                 Handle::from_raw(res as u64).unwrap()
             };
+            debug!("Handle1: {:?}", handle1);
             let handle2 = unsafe {
                 let res = CreateFileA(
                     pipe_path.as_bytes().as_ptr() as *const _,
@@ -89,6 +92,7 @@ impl CrossPlatformIpcChannel for IpcChannel {
                 }
                 Handle::from_raw(res as u64).unwrap()
             };
+            debug!("Handle2: {:?}", handle1);
             let res = unsafe { ConnectNamedPipe(handle1.as_raw() as HANDLE, null_mut()) };
             if res == 0 {
                 let err = unsafe { GetLastError() };
